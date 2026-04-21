@@ -93,10 +93,20 @@ class RadioGateNode {
 
   static constexpr uint16_t MAX_MESH_PAYLOAD = 180;
   static constexpr uint16_t MAX_MESSAGE_TEXT = 160;
+  static constexpr uint16_t MAX_WS_MESSAGE_LENGTH = 512;
   static constexpr uint16_t MESH_HEADER_SIZE = 26;
   static constexpr uint16_t MAX_LORA_PACKET_SIZE = 230;
   static constexpr uint8_t INVALID_WS_CLIENT_NUM = 255;
   static constexpr uint8_t MAX_DISPLAY_NAME_SUFFIX = 100;
+  static constexpr uint8_t SESSION_TOKEN_LENGTH = 16;
+  static constexpr uint8_t MIN_USERNAME_LENGTH = 3;
+  static constexpr uint8_t MAX_USERNAME_LENGTH = 24;
+  static constexpr uint8_t MIN_MAC_LENGTH = 8;
+  static constexpr uint8_t MAX_MAC_LENGTH = 18;
+
+  static constexpr uint8_t LORA_PIN_CS = 18;
+  static constexpr uint8_t LORA_PIN_RST = 14;
+  static constexpr uint8_t LORA_PIN_IRQ = 26;
 
   static constexpr uint32_t LORA_FREQUENCY = 433000000UL;
   static constexpr long LORA_BW = 125E3;
@@ -272,7 +282,10 @@ class RadioGateNode {
   }
 
   static void buildNodeId(uint32_t nodeHash, char* out, size_t outSize) {
-    snprintf(out, outSize, "N-%08lX", static_cast<unsigned long>(nodeHash));
+    int written = snprintf(out, outSize, "N-%08lX", static_cast<unsigned long>(nodeHash));
+    if (written < 0 || static_cast<size_t>(written) >= outSize) {
+      if (outSize > 0) out[outSize - 1] = '\0';
+    }
   }
 
   void chooseDisplayName() {
@@ -293,7 +306,10 @@ class RadioGateNode {
       ++selected;
     }
 
-    snprintf(displayName_, sizeof(displayName_), "%s%d", NODE_NAME_PREFIX, selected);
+    int written = snprintf(displayName_, sizeof(displayName_), "%s%d", NODE_NAME_PREFIX, selected);
+    if (written < 0 || static_cast<size_t>(written) >= sizeof(displayName_)) {
+      copySafe(displayName_, sizeof(displayName_), "Lora-0");
+    }
     WiFi.scanDelete();
   }
 
@@ -332,7 +348,7 @@ class RadioGateNode {
   }
 
   void setupLoRa() {
-    LoRa.setPins(18, 14, 26);
+    LoRa.setPins(LORA_PIN_CS, LORA_PIN_RST, LORA_PIN_IRQ);
     if (!LoRa.begin(LORA_FREQUENCY)) {
       Serial.println("[LORA] init failed");
       return;
@@ -483,7 +499,7 @@ class RadioGateNode {
     const char* username = req["username"] | "";
     const char* mac = req["mac"] | "";
 
-    if (strlen(username) < 3 || strlen(username) >= 24 || strlen(mac) < 8 || strlen(mac) >= 18) {
+    if (strlen(username) < MIN_USERNAME_LENGTH || strlen(username) >= MAX_USERNAME_LENGTH || strlen(mac) < MIN_MAC_LENGTH || strlen(mac) >= MAX_MAC_LENGTH) {
       StaticJsonDocument<128> err;
       err["status"] = "error";
       err["code"] = "BAD_REQUEST";
@@ -546,7 +562,7 @@ class RadioGateNode {
     session->used = true;
     copySafe(session->username, sizeof(session->username), username);
     copySafe(session->clientMac, sizeof(session->clientMac), mac);
-    randomHex(session->token, 16);
+    randomHex(session->token, SESSION_TOKEN_LENGTH);
     session->createdAtMs = now;
     session->lastActivityMs = now;
     session->lastPongMs = now;
@@ -623,7 +639,7 @@ class RadioGateNode {
     const char* to = req["to"] | "";
     const char* content = req["content"] | "";
 
-    if (strlen(token) != 16) {
+    if (strlen(token) != SESSION_TOKEN_LENGTH) {
       StaticJsonDocument<128> err;
       err["status"] = "error";
       err["code"] = "SESSION_INVALID";
@@ -641,7 +657,7 @@ class RadioGateNode {
     }
     session->lastActivityMs = millis();
 
-    if (strlen(to) < 3 || strlen(to) >= 24 || strlen(content) == 0 || strlen(content) > MAX_MESSAGE_TEXT) {
+    if (strlen(to) < MIN_USERNAME_LENGTH || strlen(to) >= MAX_USERNAME_LENGTH || strlen(content) == 0 || strlen(content) > MAX_MESSAGE_TEXT) {
       StaticJsonDocument<128> err;
       err["status"] = "error";
       err["code"] = "PAYLOAD_TOO_LARGE";
@@ -874,7 +890,7 @@ class RadioGateNode {
   }
 
   void handleWsText(uint8_t clientNum, uint8_t* payload, size_t length) {
-    if (length == 0 || length > 512) return;
+    if (length == 0 || length > MAX_WS_MESSAGE_LENGTH) return;
 
     StaticJsonDocument<512> doc;
     auto err = deserializeJson(doc, payload, length);
