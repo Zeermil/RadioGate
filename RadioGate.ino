@@ -93,6 +93,10 @@ class RadioGateNode {
 
   static constexpr uint16_t MAX_MESH_PAYLOAD = 180;
   static constexpr uint16_t MAX_MESSAGE_TEXT = 160;
+  static constexpr uint16_t MESH_HEADER_SIZE = 26;
+  static constexpr uint16_t MAX_LORA_PACKET_SIZE = 230;
+  static constexpr uint8_t INVALID_WS_CLIENT_NUM = 255;
+  static constexpr uint8_t MAX_DISPLAY_NAME_SUFFIX = 100;
 
   static constexpr uint32_t LORA_FREQUENCY = 433000000UL;
   static constexpr long LORA_BW = 125E3;
@@ -274,18 +278,18 @@ class RadioGateNode {
   void chooseDisplayName() {
     WiFi.mode(WIFI_MODE_APSTA);
     int found = WiFi.scanNetworks(false, true);
-    bool used[100];
+    bool used[MAX_DISPLAY_NAME_SUFFIX];
     memset(used, 0, sizeof(used));
 
     for (int i = 0; i < found; ++i) {
       String ssid = WiFi.SSID(i);
       if (!ssid.startsWith(NODE_NAME_PREFIX)) continue;
       int num = ssid.substring(strlen(NODE_NAME_PREFIX)).toInt();
-      if (num >= 1 && num < 100) used[num] = true;
+      if (num >= 1 && num < MAX_DISPLAY_NAME_SUFFIX) used[num] = true;
     }
 
     int selected = 1;
-    while (selected < 100 && used[selected]) {
+    while (selected < MAX_DISPLAY_NAME_SUFFIX && used[selected]) {
       ++selected;
     }
 
@@ -502,7 +506,7 @@ class RadioGateNode {
       StaticJsonDocument<192> err;
       err["status"] = "error";
       err["code"] = "USERNAME_TAKEN";
-      err["message"] = "Этот ник уже занят";
+      err["message"] = "Username is already taken";
       sendJson(409, err);
       return;
     }
@@ -706,7 +710,7 @@ class RadioGateNode {
     resp["neighbors"] = countNeighbors();
     resp["freeHeap"] = freeHeap;
     resp["minFreeHeap"] = minFreeHeap_;
-    resp["freePsram"] = ESP.getFreePsram();
+    resp["freePsram"] = psramFound() ? ESP.getFreePsram() : 0;
     resp["loraQueue"] = countTxQueue();
     resp["seenPackets"] = countSeenPackets();
     sendJson(200, resp);
@@ -908,7 +912,7 @@ class RadioGateNode {
   }
 
   void deliverToLocalClient(const PendingMessage& msg) {
-    uint8_t clientNum = 255;
+    uint8_t clientNum = INVALID_WS_CLIENT_NUM;
     for (const auto& b : wsBindings_) {
       if (b.used && strcmp(b.username, msg.toUsername) == 0) {
         clientNum = b.clientNum;
@@ -916,7 +920,7 @@ class RadioGateNode {
       }
     }
 
-    if (clientNum == 255) return;
+    if (clientNum == INVALID_WS_CLIENT_NUM) return;
 
     StaticJsonDocument<512> doc;
     doc["type"] = "MESSAGE_INCOMING";
@@ -1076,7 +1080,7 @@ class RadioGateNode {
   }
 
   static bool parseHeader(const uint8_t* data, size_t len, MeshHeader& h) {
-    if (len < 26) return false;
+    if (len < MESH_HEADER_SIZE) return false;
     h.magic = static_cast<uint16_t>(data[0] | (data[1] << 8));
     h.version = data[2];
     h.type = data[3];
@@ -1223,12 +1227,12 @@ class RadioGateNode {
   void handleLoRaRx() {
     int packetSize = LoRa.parsePacket();
     if (packetSize <= 0) return;
-    if (packetSize > 230) {
+    if (packetSize > MAX_LORA_PACKET_SIZE) {
       while (LoRa.available()) LoRa.read();
       return;
     }
 
-    uint8_t data[230];
+    uint8_t data[MAX_LORA_PACKET_SIZE];
     size_t len = 0;
     while (LoRa.available() && len < sizeof(data)) {
       data[len++] = static_cast<uint8_t>(LoRa.read());
@@ -1245,8 +1249,8 @@ class RadioGateNode {
     updateNeighbor(h.srcNodeHash, LoRa.packetRssi(), LoRa.packetSnr());
     learnRoute(h.originNodeHash, h.srcNodeHash, LoRa.packetRssi());
 
-    const uint8_t* payload = data + 26;
-    size_t payloadLen = len - 26;
+    const uint8_t* payload = data + MESH_HEADER_SIZE;
+    size_t payloadLen = len - MESH_HEADER_SIZE;
     processMeshPayload(h, payload, payloadLen);
 
     if (shouldRelay(h)) {
@@ -1414,12 +1418,12 @@ class RadioGateNode {
     TxQueueItem item = txQueue_[idx];
     memset(&txQueue_[idx], 0, sizeof(txQueue_[idx]));
 
-    uint8_t buffer[26 + MAX_MESH_PAYLOAD];
+    uint8_t buffer[MESH_HEADER_SIZE + MAX_MESH_PAYLOAD];
     serializeHeader(item.header, buffer);
-    memcpy(buffer + 26, item.payload, item.payloadLen);
+    memcpy(buffer + MESH_HEADER_SIZE, item.payload, item.payloadLen);
 
     LoRa.beginPacket();
-    LoRa.write(buffer, 26 + item.payloadLen);
+    LoRa.write(buffer, MESH_HEADER_SIZE + item.payloadLen);
     LoRa.endPacket(true);
   }
 
