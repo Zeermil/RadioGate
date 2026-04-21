@@ -97,6 +97,7 @@ class RadioGateNode {
   static constexpr uint16_t MESH_HEADER_SIZE = 26;
   static constexpr uint16_t MAX_LORA_PACKET_SIZE = 230;
   static constexpr uint8_t INVALID_WS_CLIENT_NUM = 255;
+  static constexpr uint8_t INVALID_PRIORITY = 255;
   static constexpr uint8_t MAX_DISPLAY_NAME_SUFFIX = 100;
   static constexpr uint8_t SESSION_TOKEN_LENGTH = 16;
   static constexpr uint8_t MIN_USERNAME_LENGTH = 3;
@@ -107,6 +108,9 @@ class RadioGateNode {
   static constexpr uint8_t LORA_PIN_CS = 18;
   static constexpr uint8_t LORA_PIN_RST = 14;
   static constexpr uint8_t LORA_PIN_IRQ = 26;
+  static constexpr uint32_t FALLBACK_NODE_HASH = 0xA5A5A5A5;
+  static constexpr uint8_t PACKET_ID_SALT_MESH = 0x5A;
+  static constexpr uint8_t PACKET_ID_SALT_ACK = 0x7D;
 
   static constexpr uint32_t LORA_FREQUENCY = 433000000UL;
   static constexpr long LORA_BW = 125E3;
@@ -278,7 +282,7 @@ class RadioGateNode {
       buf[i] = static_cast<uint8_t>((chip >> (i * 8)) & 0xFF);
     }
     uint32_t h = fnv1a(buf, sizeof(buf));
-    return h ? h : 0xA5A5A5A5;
+    return h ? h : FALLBACK_NODE_HASH;
   }
 
   static void buildNodeId(uint32_t nodeHash, char* out, size_t outSize) {
@@ -297,13 +301,18 @@ class RadioGateNode {
     for (int i = 0; i < found; ++i) {
       String ssid = WiFi.SSID(i);
       if (!ssid.startsWith(NODE_NAME_PREFIX)) continue;
-      int num = ssid.substring(strlen(NODE_NAME_PREFIX)).toInt();
+      String suffix = ssid.substring(strlen(NODE_NAME_PREFIX));
+      if (!isAsciiDigits(suffix)) continue;
+      int num = suffix.toInt();
       if (num >= 1 && num < MAX_DISPLAY_NAME_SUFFIX) used[num] = true;
     }
 
     int selected = 1;
     while (selected < MAX_DISPLAY_NAME_SUFFIX && used[selected]) {
       ++selected;
+    }
+    if (selected >= MAX_DISPLAY_NAME_SUFFIX) {
+      selected = random(1, MAX_DISPLAY_NAME_SUFFIX);
     }
 
     int written = snprintf(displayName_, sizeof(displayName_), "%s%d", NODE_NAME_PREFIX, selected);
@@ -499,7 +508,7 @@ class RadioGateNode {
     const char* username = req["username"] | "";
     const char* mac = req["mac"] | "";
 
-    if (strlen(username) < MIN_USERNAME_LENGTH || strlen(username) >= MAX_USERNAME_LENGTH || strlen(mac) < MIN_MAC_LENGTH || strlen(mac) >= MAX_MAC_LENGTH) {
+    if (!isValidUsername(username) || !isValidMac(mac)) {
       StaticJsonDocument<128> err;
       err["status"] = "error";
       err["code"] = "BAD_REQUEST";
@@ -657,7 +666,7 @@ class RadioGateNode {
     }
     session->lastActivityMs = millis();
 
-    if (strlen(to) < MIN_USERNAME_LENGTH || strlen(to) >= MAX_USERNAME_LENGTH || strlen(content) == 0 || strlen(content) > MAX_MESSAGE_TEXT) {
+    if (!isValidUsername(to) || strlen(content) == 0 || strlen(content) > MAX_MESSAGE_TEXT) {
       StaticJsonDocument<128> err;
       err["status"] = "error";
       err["code"] = "PAYLOAD_TOO_LARGE";
@@ -684,7 +693,8 @@ class RadioGateNode {
     }
 
     uint32_t now = millis();
-    snprintf(p->messageId, sizeof(p->messageId), "M-%08lX-%08lX", static_cast<unsigned long>(nodeHash_), static_cast<unsigned long>(++packetSeq_));
+    uint32_t messageSeq = ++packetSeq_;
+    snprintf(p->messageId, sizeof(p->messageId), "M-%08lX-%08lX", static_cast<unsigned long>(nodeHash_), static_cast<unsigned long>(messageSeq));
     copySafe(p->fromUsername, sizeof(p->fromUsername), session->username);
     copySafe(p->toUsername, sizeof(p->toUsername), to);
     copySafe(p->content, sizeof(p->content), content);
@@ -726,7 +736,9 @@ class RadioGateNode {
     resp["neighbors"] = countNeighbors();
     resp["freeHeap"] = freeHeap;
     resp["minFreeHeap"] = minFreeHeap_;
-    resp["freePsram"] = psramFound() ? ESP.getFreePsram() : 0;
+    uint32_t freePsram = psramFound() ? ESP.getFreePsram() : 0;
+    resp["freePsram"] = freePsram;
+    resp["freePSRAM"] = freePsram;
     resp["loraQueue"] = countTxQueue();
     resp["seenPackets"] = countSeenPackets();
     sendJson(200, resp);
@@ -1060,7 +1072,7 @@ class RadioGateNode {
     memcpy(idSeed + 8, &h.type, 1);
     idSeed[9] = h.ttl;
     idSeed[10] = h.flags;
-    idSeed[11] = 0x5A;
+    idSeed[11] = PACKET_ID_SALT_MESH;
     h.packetId = fnv1a(idSeed, sizeof(idSeed));
 
     enqueueTx(h, payload, payloadLen, priority, millis() + jitterMs);
@@ -1406,7 +1418,7 @@ class RadioGateNode {
     idSeed[8] = h.type;
     idSeed[9] = h.ttl;
     idSeed[10] = h.flags;
-    idSeed[11] = 0x7D;
+    idSeed[11] = PACKET_ID_SALT_ACK;
     h.packetId = fnv1a(idSeed, sizeof(idSeed));
 
     enqueueTx(h, payload, len, 1, millis() + random(20, 80));
@@ -1416,7 +1428,7 @@ class RadioGateNode {
     uint32_t now = millis();
 
     int idx = -1;
-    uint8_t bestPrio = 255;
+    uint8_t bestPrio = INVALID_PRIORITY;
     uint32_t bestDue = UINT32_MAX;
 
     for (int i = 0; i < MAX_TX_QUEUE; ++i) {
@@ -1565,3 +1577,20 @@ void setup() {
 void loop() {
   gNode.loop();
 }
+  static bool isAsciiDigits(const String& s) {
+    if (s.isEmpty()) return false;
+    for (size_t i = 0; i < s.length(); ++i) {
+      if (!isDigit(s.charAt(i))) return false;
+    }
+    return true;
+  }
+
+  static bool isValidUsername(const char* username) {
+    size_t len = strlen(username);
+    return len >= MIN_USERNAME_LENGTH && len < MAX_USERNAME_LENGTH;
+  }
+
+  static bool isValidMac(const char* mac) {
+    size_t len = strlen(mac);
+    return len >= MIN_MAC_LENGTH && len < MAX_MAC_LENGTH;
+  }
