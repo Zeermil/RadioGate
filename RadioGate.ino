@@ -292,10 +292,28 @@ class RadioGateNode {
     }
   }
 
+  static bool isAsciiDigits(const String& s) {
+    if (s.isEmpty()) return false;
+    for (size_t i = 0; i < s.length(); ++i) {
+      if (!isDigit(s.charAt(i))) return false;
+    }
+    return true;
+  }
+
+  static bool isValidUsername(const char* username) {
+    size_t len = strlen(username);
+    return len >= MIN_USERNAME_LENGTH && len < MAX_USERNAME_LENGTH;
+  }
+
+  static bool isValidMac(const char* mac) {
+    size_t len = strlen(mac);
+    return len >= MIN_MAC_LENGTH && len < MAX_MAC_LENGTH;
+  }
+
   void chooseDisplayName() {
     WiFi.mode(WIFI_MODE_APSTA);
     int found = WiFi.scanNetworks(false, true);
-    bool used[MAX_DISPLAY_NAME_SUFFIX];
+    bool used[MAX_DISPLAY_NAME_SUFFIX + 1];
     memset(used, 0, sizeof(used));
 
     for (int i = 0; i < found; ++i) {
@@ -304,15 +322,15 @@ class RadioGateNode {
       String suffix = ssid.substring(strlen(NODE_NAME_PREFIX));
       if (!isAsciiDigits(suffix)) continue;
       int num = suffix.toInt();
-      if (num >= 1 && num < MAX_DISPLAY_NAME_SUFFIX) used[num] = true;
+      if (num >= 1 && num <= MAX_DISPLAY_NAME_SUFFIX) used[num] = true;
     }
 
     int selected = 1;
-    while (selected < MAX_DISPLAY_NAME_SUFFIX && used[selected]) {
+    while (selected <= MAX_DISPLAY_NAME_SUFFIX && used[selected]) {
       ++selected;
     }
-    if (selected >= MAX_DISPLAY_NAME_SUFFIX) {
-      selected = random(1, MAX_DISPLAY_NAME_SUFFIX);
+    if (selected > MAX_DISPLAY_NAME_SUFFIX) {
+      selected = random(1, MAX_DISPLAY_NAME_SUFFIX + 1);
     }
 
     int written = snprintf(displayName_, sizeof(displayName_), "%s%d", NODE_NAME_PREFIX, selected);
@@ -738,7 +756,6 @@ class RadioGateNode {
     resp["minFreeHeap"] = minFreeHeap_;
     uint32_t freePsram = psramFound() ? ESP.getFreePsram() : 0;
     resp["freePsram"] = freePsram;
-    resp["freePSRAM"] = freePsram;
     resp["loraQueue"] = countTxQueue();
     resp["seenPackets"] = countSeenPackets();
     sendJson(200, resp);
@@ -1577,20 +1594,3 @@ void setup() {
 void loop() {
   gNode.loop();
 }
-  static bool isAsciiDigits(const String& s) {
-    if (s.isEmpty()) return false;
-    for (size_t i = 0; i < s.length(); ++i) {
-      if (!isDigit(s.charAt(i))) return false;
-    }
-    return true;
-  }
-
-  static bool isValidUsername(const char* username) {
-    size_t len = strlen(username);
-    return len >= MIN_USERNAME_LENGTH && len < MAX_USERNAME_LENGTH;
-  }
-
-  static bool isValidMac(const char* mac) {
-    size_t len = strlen(mac);
-    return len >= MIN_MAC_LENGTH && len < MAX_MAC_LENGTH;
-  }
