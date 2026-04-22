@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.lora.meshchat.app-mergeDebugResources-57:/values-ldltr-v21/values-ldltr-v21.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\zerik\\.gradle\\caches\\transforms-3\\8e491053c654f8067b1bbb0efec3116d\\transformed\\appcompat-1.6.1\\res\\values-ldltr-v21\\values-ldltr-v21.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "112",
+                        "endOffsets": "163"
+                    }
+                }
+            ]
+        }
+    ]
+}
